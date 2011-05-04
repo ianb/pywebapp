@@ -1,7 +1,9 @@
+import sys
 import os
-import pyyaml
+import yaml
 import zipfile
 import tempfile
+from site import addsitedir
 
 
 class PyWebApp(object):
@@ -20,15 +22,14 @@ class PyWebApp(object):
     @property
     def config(self):
         if self._config is None:
-            self.read_config()
+            fp = self.get_file('app.yaml')
+            try:
+                return yaml.load(fp)
+            finally:
+                fp.close()
         return self._config
 
-    def read_config(self):
-        fp = self.get_file('app.yaml')
-        try:
-            return pyyaml.load(fp)
-        finally:
-            fp.close()
+    ## Helpers for file names and handling:
 
     def get_file(self, relpath):
         if self.is_zip:
@@ -65,13 +66,11 @@ class PyWebApp(object):
         else:
             return os.path.exists(self.abspath(path))
 
-    @property
-    def runner(self):
-        """The filename of the runner for this application"""
-        return self.abspath(self.config['runner'])
+    ## Properties to read and normalize specific configuration values:
 
     @property
     def static_path(self):
+        """The path of static files"""
         if 'static' in self.config:
             return self.abspath(self.config['static'])
         elif self.exists('static'):
@@ -82,6 +81,7 @@ class PyWebApp(object):
     ## FIXME: don't like this name (Silver Lining: .packages)
     @property
     def requires(self):
+        """A list of things the system must supply, e.g., lxml"""
         v = self.config.get('requires')
         if not v:
             return []
@@ -90,40 +90,104 @@ class PyWebApp(object):
         return v
 
     @property
+    def runner(self):
+        """The runner value (where the application is instantiated)"""
+        runner = self.config.get('runner')
+        if not runner:
+            return None
+        return self.abspath(runner)
+
+    @property
     def config_required(self):
+        """Bool: is the configuration required"""
         return self.config.get('config', {}).get('required')
 
     @property
     def config_template(self):
+        """Path: where a configuration template exists"""
         v = self.config.get('config', {}).get('template')
         if v:
             return self.abspath(v)
         return None
 
     @property
-    def config_checker(self):
-        v = self.config.get('config', {}).get('checker')
+    def config_validator(self):
+        """Object: validator for the configuration"""
+        v = self.config.get('config', {}).get('validator')
         if v:
-            return self.objloader(v, 'config.checker')
+            return self.objloader(v, 'config.validator')
         return None
 
     @property
     def config_default(self):
+        """Path: default configuration if no other is provided"""
         dir = self.config.get('config', {}).get('default')
         if dir:
             return self.abspath(dir)
         return None
 
+    @property
+    def add_paths(self):
+        """List of paths: things to add to sys.path"""
+        dirs = self.config.get('add_paths', [])
+        if isinstance(dirs, basestring):
+            dirs = [dirs]
+        ## FIXME: should ensure all paths are relative
+        return [self.abspath(dir) for dir in dirs]
+
+    @property
+    def services(self):
+        """Dict of {service_name: config}: all the configured services.  Config may be None"""
+        services = self.config.get('services', [])
+        if isinstance(services, list):
+            services = dict((v, None) for v in services)
+        return services
+
+    ## Process initialization
+
     def activate_path(self):
-        norm_paths = [os.path.normcase(os.path.abspath(p)) for p in sys.path
-                      if os.path.exists(p)]
-        lib_path = self.abspath('lib/python%s/site-packages' % sys.version[:3])
-        if lib_path not in norm_path and os.path.exists(lib_path):
-            addsitedir(lib_path)
-        sitecustomize = self.abspath('lib/python%s/sitecustomize.py' % sys.version[:3])
-        if os.path.exists(sitecustomize):
+        add_paths = list(self.add_paths)
+        add_paths.extend([
+            self.abspath('lib/python%s' % sys.version[:3]),
+            self.abspath('lib/python%s/site-customize' % sys.version[:3]),
+            self.abspath('lib/python'),
+            ])
+        for path in reversed(add_paths):
+            self.add_path(path)
+
+    def add_sys_path(self, path):
+        """Adds one path to sys.path.
+
+        This also reads .pth files, and makes sure all paths end up at the front, ahead
+        of any system paths.
+        """
+        if not os.path.exists(path):
+            return
+        old_path = [os.path.normcase(os.path.abspath(p)) for p in sys.path
+                    if os.path.exists(p)]
+        addsitedir(path)
+        new_paths = list(sys.path)
+        sys.path[:] = old_path
+        new_sitecustomizes = []
+        for path in new_paths:
+            path = os.path.normcase(os.path.abspath(path))
+            if path not in sys.path:
+                sys.path.insert(0, path)
+                if os.path.exists(os.path.join(path, 'sitecustomize.py')):
+                    new_sitecustomizes.append(os.path.join(path, 'sitecustomize.py'))
+        for sitecustomize in new_sitecustomizes:
             ns = {'__file__': sitecustomize, '__name__': 'sitecustomize'}
             execfile(sitecustomize, ns)
-        lib_path = self.abspath('lib/python')
-        if lib_path not in norm_path and os.path.exists(lib_path):
-            addsitedir(lib_path)
+
+    @property
+    def wsgi_app(self):
+        runner = self.runner
+        if runner is None:
+            raise Exception(
+                "No runner has been defined")
+        ns = {'__file__': runner, '__name__': 'main_py'}
+        execfile(runner, ns)
+        if 'application' in ns:
+            return ns['application']
+        else:
+            raise NameError("No application defined in %s" % runner)

@@ -1,0 +1,94 @@
+Process Initialization
+----------------------
+
+You should instantiate ``app = pywebapp.PyWebApp()``
+
+Then call ``app.activate_path()`` to set ``sys.path``
+
+Get the app from ``app.wsgi_app``
+
+Config Files
+------------
+
+Configuration files are YAML, named ``app.yaml``.
+
+runner:
+    A Python file.  It does not need to be importable, and may have
+    for example ``-`` in its name, or use an extension like ``.wsgi``
+    instead of ``.py``.
+
+    This file when exec'd should produce a global variable
+    ``application``
+
+add_paths:
+    A single path or a list of paths that should be added to
+    ``sys.path``.  All paths will get priority over system-wide paths,
+    and ``.pth`` files will be interpreted.  Also if a
+    ``sitecustomize.py`` file exists in any path it will be exec'd.
+    Multiple ``sitecustomize.py`` files may be exec'd!
+
+static_path:
+    A path that will contain static files.  These will be available
+    *at the root* of the application, so if you do ``static_path:
+    static/`` then ``static/favicon.ico`` will be available at the URL
+    path ``/favicon.ico``.  If you want a file at, for instance,
+    ``/static/blank.gif`` you must put it in
+    ``static/static/blank.gif``.
+
+    This value defaults to ``static/``
+
+requires:
+    A list of package names that must be installed.  Currently Linux
+    packages?  Not entirely defined.
+
+config:
+    This relates to configuration that the application requires.  This
+    is for applications that are not self-configured.  Configuration
+    is simple a directory, which may contain one or more files, in any
+    format, to be determined by the application itself.
+
+config.required:
+    If true then configuration is required.
+
+config.template:
+    This is a template for creating a valid configuration (which the
+    deployer may then edit).  What kind of template is not yet
+    defined.
+
+config.checker:
+    This checks a configuration for validity (presumably after the
+    deployer edits it).  This is a command.  Not fully defined.
+
+config.default:
+    This is a relative path which points to the default configuration
+    if one is not given.  If this value is provided then
+    ``config.required`` won't really matter, as the application will
+    always have at least its default configuration.
+
+Events/hooks
+------------
+
+install:
+    Called when an application is first installed.
+before_update:
+    Called before an update is applied.
+update:
+    Called when an application is updated.
+before_delete:
+    Called before deleting an application.
+ping:
+    Called to check if an application is alive; must be low in
+    resource usage.  A URL is most preferable for this parameter.
+health_check:
+    Called to check if an application is in good shape.  May do
+    integrity checks on data, for instance.  May be high in resource
+    usage.
+config.validator:
+    Called to check if the configuration is valid.
+check_environment:
+    Can be called to confirm that the environment is properly
+    configured, for instance to check that all necessary command-line
+    programs are available.  This check is optional, the environment
+    need not run it.
+
+(install/update is not an easy distinction in some cases?)
