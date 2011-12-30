@@ -1,8 +1,10 @@
 import sys
 import os
 import yaml
+import new
 import zipfile
 import tempfile
+import subprocess
 from site import addsitedir
 
 
@@ -69,6 +71,10 @@ class PyWebApp(object):
     ## Properties to read and normalize specific configuration values:
 
     @property
+    def name(self):
+        return self.config['name']
+
+    @property
     def static_path(self):
         """The path of static files"""
         if 'static' in self.config:
@@ -77,17 +83,6 @@ class PyWebApp(object):
             return self.abspath('static')
         else:
             return None
-
-    ## FIXME: don't like this name (Silver Lining: .packages)
-    @property
-    def requires(self):
-        """A list of things the system must supply, e.g., lxml"""
-        v = self.config.get('requires')
-        if not v:
-            return []
-        if isinstance(v, basestring):
-            v = [v]
-        return v
 
     @property
     def runner(self):
@@ -149,11 +144,20 @@ class PyWebApp(object):
         add_paths = list(self.add_paths)
         add_paths.extend([
             self.abspath('lib/python%s' % sys.version[:3]),
-            self.abspath('lib/python%s/site-customize' % sys.version[:3]),
+            self.abspath('lib/python%s/site-packages' % sys.version[:3]),
             self.abspath('lib/python'),
             ])
         for path in reversed(add_paths):
             self.add_path(path)
+
+    def setup_settings(self):
+        """Create the settings that the application itself can import"""
+        if 'websettings' in sys.modules:
+            return
+        module = new.module('websettings')
+        module.add_setting = _add_setting
+        sys.modules[module.__name__] = module
+        return module
 
     def add_sys_path(self, path):
         """Adds one path to sys.path.
@@ -191,3 +195,53 @@ class PyWebApp(object):
             return ns['application']
         else:
             raise NameError("No application defined in %s" % runner)
+
+    def call_script(self, script_path, arguments, env_overrides=None, cwd=None, python_exe=None,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE):
+        """Calls a script, returning the subprocess.Proc object
+        """
+        env = os.environ.copy()
+        script_path = os.path.join(self.path, script_path)
+        if env_overrides:
+            env.update(env_overrides)
+        if not cwd:
+            cwd = self.path
+        if not python_exe:
+            python_exe = sys.executable
+        calling_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'call-script.py')
+        args = [python_exe, calling_script, self.path, script_path]
+        args.extend(arguments)
+        env['PYWEBAPP_LOCATION'] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.Popen(args, stdout=stdout, stderr=stderr, stdin=stdin,
+                                environ=env, cwd=cwd)
+        return proc
+
+    ## FIXME: need something to run "commands" (as defined in the spec)
+
+
+def _add_setting(name, value):
+    _check_settings_value(name, value)
+    setattr(sys.modules['websettings'], name, value)
+
+
+def _check_settings_value(name, value):
+    """Checks that a setting value is correct.
+
+    Settings values can only be JSON-compatible types, i.e., list,
+    dict, string, int/float, bool, None.
+    """
+    if isinstance(value, dict):
+        for key in value:
+            if not isinstance(key, basestring):
+                raise ValueError("Setting %s has invalid key (not a string): %r"
+                                 % key)
+            _check_settings_value(name + "." + key, value[key])
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _check_settings_value("%s[%r]" % (name, index), item)
+    elif isinstance(value, (basestring, int, float, bool)):
+        pass
+    elif value is None:
+        pass
+    else:
+        raise ValueError("Setting %s is not a valid type: %r" % (name, value))

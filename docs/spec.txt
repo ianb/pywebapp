@@ -1,16 +1,102 @@
+PyWebApps
+=========
+
+This describes, somewhat pedantically and in a non-helpful order,
+parts of what makes up a PyWebApp.  Known-open-questions are marked
+with "FIXME".
+
 Process Initialization
 ----------------------
 
+This is the process that the container must go through when
+starting/activating an application.
+
 You should instantiate ``app = pywebapp.PyWebApp()``
 
-Then call ``app.activate_path()`` to set ``sys.path``
+Then you should create the settings module with
+``app.setup_settings()``.  This creates a module ``websettings``.
+
+Next you must activate all the services.  This is something your tool
+itself must do.  At its most basic you do::
+
+    websettings.add_setting(service_name, settings)
+
+For example::
+
+    websettings.add_setting('mysql', {'username': 'root', ...})
+
+This creates a value ``websettings.mysql`` (but the function does
+other checks for validity).  There are some helpers you can use (in
+``pywebapp.services``), but these are a convenience to you.
+
+**After** you have setup the services you call ``app.activate_path()``
+to set ``sys.path``.  This also may import code that uses settings, so
+it is important to setup services first.
 
 Get the app from ``app.wsgi_app``
 
-Config Files
-------------
+Process Configuration
+---------------------
 
-Configuration files are YAML, named ``app.yaml``.
+The ``websettings`` module contains configuration from the
+host/container of the application that is being sent to the
+application.  Anything can go in here, including ad hoc settings, but
+some settings are expected.
+
+websettings.config_dir:
+    The path to the configuration (a directory).  May be None.  Must
+    be set.
+
+websettings.canonical_hostname:
+    The "base" hostname.  The application may be on a wildcard domain
+    or something like that, but this is at least one hostname that
+    will point back to the application.  It may be the only hostname.
+    This like the Host header: ``domain:port``.
+
+websettings.canonical_scheme:
+    The expected scheme, generally either ``http`` or ``https``.
+    ``environ['wsgi.url_scheme']`` also of course must be set.
+    Generally this is set to https when the container is forcing all
+    requests to be https.
+
+websettings.log_dir:
+    A path where log files can be written.  It is simply writable, and
+    is entirely under control of the application.  (FIXME: maybe a
+    couple names here could be reserved by the container?  Or... maybe
+    best not?)
+
+Also some environmental context should be set properly:
+
+current directory:
+    Must be the application root
+
+``$TEMP``:
+    A temporary directory.  This should be application-private, and as
+    such a suitable place to put cache files and the like.  The
+    container should try to clear this out at appropriate times (like
+    an update).
+
+Also expect that over time specific settings will be documented and
+validated by this module.  E.g., the contents of ``websettings.mysql``
+may be standardized specifically.
+
+FIXME: some "version" of this specifically itself should go in here,
+and also be possible to require or request in the application
+description.
+
+Application Description
+-----------------------
+
+Configuration files are generally YAML throughout the system.  The
+application description is in the root of the application directory,
+and is called ``app.yaml``.
+
+app_platform:
+    This is the basic platform of the application.  ``wsgi`` is the
+    only value we've thought through.  Something like Tornado requires
+    the server itself to be run, an application entry point doesn't
+    work; it would be another kind of platform (e.g.,
+    ``python-server``?)
 
 runner:
     A Python file.  It does not need to be importable, and may have
@@ -18,14 +104,17 @@ runner:
     instead of ``.py``.
 
     This file when exec'd should produce a global variable
-    ``application``
+    ``application``.  This is a WSGI application.
 
 add_paths:
-    A single path or a list of paths that should be added to
+     A single path or a list of paths that should be added to
     ``sys.path``.  All paths will get priority over system-wide paths,
     and ``.pth`` files will be interpreted.  Also if a
     ``sitecustomize.py`` file exists in any path it will be exec'd.
-    Multiple ``sitecustomize.py`` files may be exec'd!
+    Multiple ``sitecustomize.py`` files may be exec'd!  By default
+    ``lib/pythonX.Y``, ``lib/pythonX.Y/site-packages``, and
+    ``lib/python`` will be loaded.  It is best to just use the last
+    (``lib/python``).
 
 static_path:
     A path that will contain static files.  These will be available
@@ -37,15 +126,47 @@ static_path:
 
     This value defaults to ``static/``
 
-requires:
-    A list of package names that must be installed.  Currently Linux
-    packages?  Not entirely defined.
+    FIXME: there should be a way to set mimetypes
+
+require_py_version:
+    Indicates the Python versions supported.  (FIXME: just
+    Setuptools-style requirement, e.g., >=2.7,<3.0 ?)
+
+require_platform:
+    This is the hosting platform you require (a list of options).
+    Generally ``posix`` and ``win`` are the options.
+
+deb:
+    These are settings specific to Debian and Ubuntu systems.
+
+deb.packages:
+    Packages that should be installed on Debian/Ubuntu systems.
+
+rpm:
+    Values specific to RPM-like systems (Redhat, CentOS, etc).
+
+rpm.packages:
+    Packages that should be installed on RPM-based systems.  (FIXME:
+    often specific packages are needed, and there isn't a central
+    repository).  (FIXME: maybe we should allow ``rpm.requirements``
+    being a ``requirements.txt`` file containing anything that isn't
+    available in a package, but less than the global ``requirements``
+    file?)
+
+requirements:
+    A path to a pip ``requirements.txt`` file.  (FIXME: does deb/rpm
+    configuration takes precedence over this?  Or do we just make sure
+    those packages are installed first, so that any already-met
+    requirements don't then need to be reinstalled?)
 
 config:
     This relates to configuration that the application requires.  This
     is for applications that are not self-configured.  Configuration
-    is simple a directory, which may contain one or more files, in any
+    is simply a directory, which may contain one or more files, in any
     format, to be determined by the application itself.
+
+    Note that configuration should be things that a deployer might
+    want to change in some useful fashion.  E.g., a blog title.
 
 config.required:
     If true then configuration is required.
@@ -54,6 +175,10 @@ config.template:
     This is a template for creating a valid configuration (which the
     deployer may then edit).  What kind of template is not yet
     defined.
+
+    Probably it would contain some kind of structured description of
+    what parameters the template requires, and then a routine that
+    given the parameters will create a directory structure.
 
 config.checker:
     This checks a configuration for validity (presumably after the
@@ -65,30 +190,208 @@ config.default:
     ``config.required`` won't really matter, as the application will
     always have at least its default configuration.
 
+services:
+    This contains a number of named services.  It is up to the
+    container to interpret these and setup the services.  (FIXME:
+    clearly this needs to be expanded.)
+
+Commands
+--------
+
+Several configuration values are "commands", that is: something that
+can be executed.  All commands are run in the activated environment
+(i.e., after ``sys.path`` has been updated, and with service
+configuration).
+
+Commands take one of several formats:
+
+URL:
+    This is a URL that will be fetched.  It may be fetched through an
+    artificial WSGI request (i.e., not over-the-wire HTTP).
+
+    A URL starts with ``url:`` or simply anything that starts with
+    ``/``.  E.g., ``/__heartbeat__`` indicates a request to that URL.
+    FIXME: also there should be a way to tell that it is being called
+    as a command, not as an external URL (e.g., special environ key).
+
+Python script:
+    This is a script that will be run.  It will be run with
+    ``execfile()``, and in it ``__name__ == '__main__'``, so any
+    normal script can be used.
+
+    A Python script starts with ``pyscript:`` or any path that *does
+    not* start with ``/`` and ends in ``.py``.  All paths of course
+    are relative to the root of the application.
+
+General script:
+    This is a script that is run in a subprocess, and could be for
+    instance a shell script.  FIXME: we would need to define the
+    environment?
+
+    The script will be run with the current working directory of the
+    application root.  It will be run with something akin to
+    ``os.system()``, i.e., as a shell script.
+
+    General scripts must start with ``script:``.
+
+Python functions:
+    This is a function to be called.  The function cannot take any
+    arguments.
+
+    A Python function must start with ``pyfunc:`` and have either a
+    complete dotted-notation path, or ``module:object.attr``
+    (Setuptools-style).  Also anything that does not start with ``/``
+    and is contains only valid Python identifiers and ``.`` will
+    automatically be considered a Python function.
+
+Commands can only generally return success or failure, plus readable
+messages.  The failure case is specific:
+
+* For URLs, 2xx is success, all other status is a failure.  Output is
+  the body of the response.
+
+* For a Python script, calling ``SystemExit`` (or ``sys.exit()``) with
+  a non-zero code is failure, an exception is failure, otherwise it is
+  success.  The output is what is printed to ``sys.stdout`` and
+  ``sys.stderr``.
+
+* For a General script, exit code and stdout/stderr.
+
+* For a Python function, an exception is a failure, all else is
+  success.  Output is stdout/stderr or a string return value (if both,
+  the string is appended to output).  (FIXME: non-string, truish
+  return value?)
+
+The command environment for scripts should be:
+
+``$PYWEBAPP_LOCATION``:
+  This environmental variable points to the application root.
+
+current directory:
+  This also should(?) be at the application root.
+
+In the case of exceptions, the output value is preserved and the
+``str()`` of the exception is added.  (FIXME: also the traceback?)
+
+It may be sensible to allow a combination of a rich object (e.g.,
+response with headers, list of interleaved stdout/stderr, etc) and a
+string fallback.
+
+FIXME: General scripts and URLs can implicitly have arguments (URLs
+having the query string), but the others can't (maybe Python scripts
+also can have arguments?).  Maybe we should allow shell-quoted
+arguments to all commands (except URLs).
+
 Events/hooks
 ------------
 
+At different stages of an application's deployment lifecycle
+
 install:
-    Called when an application is first installed.
+    Called when an application is first installed.  This would be the
+    place to create database tables, for instance.
+
 before_update:
-    Called before an update is applied.
+    Called before an update is applied.  This is called in the context
+    of the previous installation/version.
+
 update:
-    Called when an application is updated.
+    Called when an application is updated, called after the update in
+    the context of the new version.
+
 before_delete:
     Called before deleting an application.
+
 ping:
     Called to check if an application is alive; must be low in
     resource usage.  A URL is most preferable for this parameter.
+
 health_check:
     Called to check if an application is in good shape.  May do
     integrity checks on data, for instance.  May be high in resource
     usage.
+
 config.validator:
     Called to check if the configuration is valid.
+
 check_environment:
     Can be called to confirm that the environment is properly
     configured, for instance to check that all necessary command-line
     programs are available.  This check is optional, the environment
     need not run it.
 
-(install/update is not an easy distinction in some cases?)
+If only one of ``install`` or ``update`` are defined, then they are
+used interchangeably.  E.g., if ``install`` is defined, it is called
+on updates.  Or if only ``update`` is defined, it is called on install.
+
+Kinds of Services
+-----------------
+
+Services are things the provider provides, and can represent a variety
+of things.  All application state must be represented through
+services.  As such you can't do much of interest without at least some
+services.
+
+files
+~~~~~
+
+This represents just a place to keep files.  The files don't do
+anything, they are to be read and written by the application.
+
+The configuration looks like::
+
+    websettings.files = {'dir': <directory>}
+
+You can write to this directory.  An optional key ``"quota"`` is the
+most data you are allowed to put in this directory (in bytes).
+
+public_files
+~~~~~~~~~~~~
+
+This is a place to keep files that you want served up.  These files
+take precedence over your own application!
+
+The directory layout starts with the domain of the request, or
+``default`` for any/all domains.  So if you want to write out a file
+that will be served up in ``/user-content/public.html`` then write it
+to ``<public_files>/default/user-content/public.html``
+
+Note that this has obvious security concerns, so you should write
+things carefully.
+
+Configuration looks like::
+
+    websettings.public_files = {"dir": <directory>}
+
+``"quota"`` is also supported.
+
+Databases
+~~~~~~~~~
+
+Several databases act similarly.
+
+The configuration parameters that are generally necessary are kept in
+a dictionary with these keys:
+
+host:
+  The host that the database is on (e.g., ``"localhost"``)
+
+port:
+  The port of the database
+
+dbname:
+  The name of the database (e.g., ``db_1234``)
+
+user:
+  The user to connect as.  May be None.
+
+password:
+  The password to connect with.  May be None.
+
+low_security_user:
+  Entirely optional, this is a second user that could be created for
+  use during runtime (as opposed to application setup).  This user
+  might not have permission to create or delete tables, for instance.
+
+low_security_password:
+  Accompanying password.
